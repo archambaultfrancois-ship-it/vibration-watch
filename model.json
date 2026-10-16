@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "schemas": "schemas",
+  "components": {
+    "sensor_1": {
+      "inputs": {},
+      "outputs": {
+        "signal": {
+          "root": "SignalBlock"
+        }
+      },
+      "trigger": {
+        "mode": "periodic",
+        "period_ms": 100
+      },
+      "parameters": {
+        "machine_id": 1
+      }
+    },
+    "analyzer_1": {
+      "inputs": {
+        "input": {
+          "root": "SignalBlock"
+        }
+      },
+      "outputs": {
+        "result": {
+          "root": "Analysis"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "sensor_2": {
+      "inputs": {},
+      "outputs": {
+        "signal": {
+          "root": "SignalBlock"
+        }
+      },
+      "trigger": {
+        "mode": "periodic",
+        "period_ms": 100
+      },
+      "parameters": {
+        "machine_id": 2
+      }
+    },
+    "analyzer_2": {
+      "inputs": {
+        "input": {
+          "root": "SignalBlock"
+        }
+      },
+      "outputs": {
+        "result": {
+          "root": "Analysis"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "alarm": {
+      "inputs": {
+        "machine_1": {
+          "root": "Analysis",
+          "required": false
+        },
+        "machine_2": {
+          "root": "Analysis",
+          "required": false
+        }
+      },
+      "outputs": {
+        "event": {
+          "root": "Alarm"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "observer": {
+      "inputs": {
+        "input": {
+          "root": "Alarm"
+        }
+      },
+      "outputs": {},
+      "trigger": {
+        "mode": "on_change"
+      }
+    }
+  },
+  "subscriptions": [
+    {
+      "id": "signal_1",
+      "from": "sensor_1.signal",
+      "to": "analyzer_1.input",
+      "qos": {
+        "buffer": "fifo",
+        "capacity": 4,
+        "overflow": "drop_oldest",
+        "ack": "received",
+        "retry": {
+          "max_retries": 2
+        }
+      }
+    },
+    {
+      "id": "analysis_1",
+      "from": "analyzer_1.result",
+      "to": "alarm.machine_1",
+      "qos": {
+        "buffer": "fifo",
+        "capacity": 64,
+        "ack": "received",
+        "retry": {}
+      }
+    },
+    {
+      "id": "signal_2",
+      "from": "sensor_2.signal",
+      "to": "analyzer_2.input",
+      "qos": {
+        "buffer": "fifo",
+        "capacity": 4,
+        "overflow": "drop_oldest",
+        "ack": "received",
+        "retry": {
+          "max_retries": 2
+        }
+      }
+    },
+    {
+      "id": "analysis_2",
+      "from": "analyzer_2.result",
+      "to": "alarm.machine_2",
+      "qos": {
+        "buffer": "fifo",
+        "capacity": 64,
+        "ack": "received",
+        "retry": {}
+      }
+    },
+    {
+      "id": "events",
+      "from": "alarm.event",
+      "to": "observer.input",
+      "qos": {
+        "buffer": "fifo",
+        "capacity": 128,
+        "ack": "received",
+        "retry": {}
+      }
+    }
+  ]
+}
