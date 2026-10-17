@@ -13,6 +13,7 @@ ARG COMPONENT=observer
 ARG SCENARIO=increasing-vibration
 ARG ROUTING=mixed
 RUN python -m pip wheel --no-deps --wheel-dir /wheels ./deps/sdl-ose/ose
+RUN make -C deps/sdl-ose/sdl filter-python PYTHON=python
 RUN python tools/vibration.py build --profile cluster --component "$COMPONENT" --scenario "$SCENARIO" --routing "$ROUTING"
 
 FROM ${PYTHON_IMAGE} AS runtime

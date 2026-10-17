@@ -41,6 +41,13 @@ another checkout. `app-run` builds and runs until Ctrl+C;
 dependencies and opens the external console. `ose-env` lists the shortcuts.
 `record-inspect FILE` displays all recorded messages; use `--limit N` to show
 only the first N selected messages.
+Recording content filters are evaluated at the source: in the broker for local
+execution, or in each producer worker for distributed execution, before capture
+queue admission and network delivery. Each recorder has independent filters.
+Build the SDL filter service with `make -C deps/sdl-ose/sdl filter-python` using
+the application's Python interpreter, then restart the application with the
+updated framework. Cluster images build this service for their own interpreter;
+rebuild and redeploy images after updating the framework submodule.
 
 The `normal` scenario keeps both motors below their RMS thresholds. The default
 `increasing-vibration` profile raises motor 1's amplitude with elapsed OSE time;
@@ -78,7 +85,7 @@ this application does not retain an alarm history or implement debouncing.
 
 See [deployment instructions](deploy/README.md) and [architecture](docs/architecture.md).
 The image build compiles one component per image, with its generated container,
-SDL runtime and OSE adapter. Cluster images are referenced by digest.
+SDL runtime, native recording filter service and OSE adapter. Cluster images are referenced by digest.
 Distributed execution is real time; deterministic simulation remains local.
 
 No images are published and no cluster is modified by `make test`.
