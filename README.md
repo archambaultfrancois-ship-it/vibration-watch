@@ -23,6 +23,23 @@ The pinned framework lives in `deps/sdl-ose`; for framework development, set
 paths live in `build/`. Rebuild after moving a checkout. The workflow uses the
 public `python -m ose.cli` interface from the selected framework checkout.
 
+For local development, initialize the pinned framework submodule, then load its
+environment and shortcuts in each Bash terminal:
+
+```sh
+git submodule update --init --recursive
+source ./setenv.sh
+app-run
+# In a second terminal, source ./setenv.sh again, then:
+record
+```
+
+The application environment selects Vibration Watch as `OSE_APP_ROOT` and sources
+`deps/sdl-ose/setenv.sh`, including when `FRAMEWORK_ROOT` was previously set to
+another checkout. `app-run` builds and runs until Ctrl+C;
+`app-run DURATION=60` limits the run. `record` prepares missing recording/filter
+dependencies and opens the external console. `ose-env` lists the shortcuts.
+
 The `normal` scenario keeps both motors below their RMS thresholds. The default
 `increasing-vibration` profile raises motor 1's amplitude with elapsed OSE time;
 it crosses the 1 m/s² RMS threshold while motor 2 stays normal. These are
