@@ -39,6 +39,8 @@ The application environment selects Vibration Watch as `OSE_APP_ROOT` and source
 another checkout. `app-run` builds and runs until Ctrl+C;
 `app-run DURATION=60` limits the run. `record` prepares missing recording/filter
 dependencies and opens the external console. `ose-env` lists the shortcuts.
+`record-inspect FILE` displays all recorded messages; use `--limit N` to show
+only the first N selected messages.
 
 The `normal` scenario keeps both motors below their RMS thresholds. The default
 `increasing-vibration` profile raises motor 1's amplitude with elapsed OSE time;
