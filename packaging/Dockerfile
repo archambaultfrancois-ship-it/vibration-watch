@@ -18,7 +18,7 @@ RUN python tools/vibration.py build --profile cluster --component "$COMPONENT" -
 FROM ${PYTHON_IMAGE} AS runtime
 WORKDIR /app
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels sdl-chain && rm -rf /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels ose && rm -rf /wheels
 COPY --from=builder --chown=10001:10001 /app /app
 USER 10001:10001
-ENTRYPOINT ["sdl-chain"]
+ENTRYPOINT ["ose-ctl"]

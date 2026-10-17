@@ -21,7 +21,7 @@ make test
 The pinned framework lives in `deps/sdl-ose`; for framework development, set
 `FRAMEWORK_ROOT=/absolute/path/to/sdl-ose`. Build artifacts and prepared absolute
 paths live in `build/`. Rebuild after moving a checkout. The workflow uses the
-public `python -m chain_env.cli` interface from the selected framework checkout.
+public `python -m ose.cli` interface from the selected framework checkout.
 
 The `normal` scenario keeps both motors below their RMS thresholds. The default
 `increasing-vibration` profile raises motor 1's amplitude with elapsed OSE time;

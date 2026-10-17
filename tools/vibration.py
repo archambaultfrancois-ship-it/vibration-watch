@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Application workflow using the public sdl-chain CLI and reproducible inputs."""
+"""Application workflow using the public ose-ctl CLI and reproducible inputs."""
 import argparse
 import base64
 import json
@@ -27,7 +27,7 @@ def write(path, value):
 
 def framework(args):
     root = Path(args.framework_root or os.environ.get("FRAMEWORK_ROOT", ROOT / "deps/sdl-ose")).resolve()
-    if not (root / "sdl/sdlc/generator.py").is_file() or not (root / "ose/src/chain_env/cli.py").is_file():
+    if not (root / "sdl/sdlc/generator.py").is_file() or not (root / "ose/src/ose/cli.py").is_file():
         raise ValueError("initialize deps/sdl-ose with git submodule update --init --recursive")
     return root
 
@@ -38,7 +38,7 @@ def environment(args):
 
 
 def cli(args, *arguments, **kwargs):
-    return subprocess.run([sys.executable, "-m", "chain_env.cli", *map(str, arguments)],
+    return subprocess.run([sys.executable, "-m", "ose.cli", *map(str, arguments)],
                           cwd=ROOT, env=environment(args), check=True, **kwargs)
 
 
@@ -120,7 +120,7 @@ def distributed_local(args):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     processes, streams = {}, []
-    command = [sys.executable, "-m", "chain_env.cli"]
+    command = [sys.executable, "-m", "ose.cli"]
     def launch(name, options):
         stream = (logs / (name + ".log")).open("ab")
         streams.append(stream)
