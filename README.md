@@ -81,6 +81,87 @@ The alarm inputs are independent and optional: losing one motor's branch does
 not stall the other. Every analysis produces an observation with state 0 or 1;
 this application does not retain an alarm history or implement debouncing.
 
+## Replay captured signals
+
+The pinned framework provides `ose-ctl replay`. During framework development,
+set `FRAMEWORK_ROOT=/absolute/path/to/sdl-ose` to select another checkout. In that
+case, source that checkout's `setenv.sh` from the application directory instead
+of the application environment below.
+
+Start the application, then capture both sensors in another terminal using the
+same framework and Python interpreter:
+
+```sh
+make run DURATION=60
+# Second terminal, from the application directory:
+source ./setenv.sh
+record --command 'select sensor_1.signal sensor_2.signal' \
+  --command 'start signals.pcapng' --command 'wait 2' --command stop
+```
+
+Replay the signals through the Rust analyzers, Python alarm policy and observer:
+
+```sh
+make replay RECORDING=signals.pcapng DURATION=3 WORKERS=4
+make replay RECORDING=signals.pcapng DURATION=6 LOOPS=2
+make test-replay
+```
+
+`replay` builds a separate model under `build/replay/`: the C sensors are removed
+and their subscriptions are connected to external topics. The workflow invokes
+`ose-ctl replay` with `sensor_1.signal=replay.signal_1` and
+`sensor_2.signal=replay.signal_2`. It accepts PCAPNG or MCAP captures; both sensor
+topics must contain messages. `tools/vibration.py replay --recording FILE`
+also accepts `--start-ns` and `--end-ns` for a recorded log-time range.
+`LOOPS` (CLI: `--loops`) is the total number of passes, defaulting to 1; 0 repeats
+until the global `DURATION` limit. Components retain state between passes, and
+payload timestamps and sequence numbers are preserved.
+
+The first selected message becomes virtual time zero; recorded intervals and
+payloads are preserved. `DURATION` is the virtual horizon from that origin;
+choose it long enough to cover the selected capture. Terminal observations are
+recomputed from the samples, including the original payload sequence numbers
+and timestamps. The logical trace is saved as `build/replay/trace.jsonl`.
+
+For live replay, build the model without sensors and start it separately:
+
+```sh
+make replay-build
+ose-ctl run --plan build/replay/plan.json
+# In a second terminal with the same framework environment:
+ose-ctl replay signals.pcapng --mode realtime --plan build/replay/plan.json \
+  --map sensor_1.signal=replay.signal_1 --map sensor_2.signal=replay.signal_2 \
+  --speed 1 --interactive
+```
+
+Use `speed 0.5`, `speed 2`, `pause`, `resume`, `status` and `stop` in the replay
+console. Speed 0 runs as quickly as admission permits. Application timestamps
+stay unchanged; changing playback speed changes the spacing between publications.
+For a scripted session, replace `--interactive` with repeated options such as
+`--command 'speed 2' --command 'wait 3' --command status --command stop`.
+Commands run in order; `wait` uses wall time, and the end of the script stops
+replay. A capture that finishes earlier cancels the remaining commands.
+Add `--loops N` for N passes or `--loops 0` for continuous live replay. In the
+latter case, commands, signals or an optional global `--duration` stop playback.
+
+`make replay-build PROFILE=cluster` builds the four-worker distributed version.
+Start its coordinator and workers using `build/replay/plan.json`, as described
+in the [framework's distributed guide](deps/sdl-ose/ose/docs/distributed.md).
+Feed it with the same replay command plus `--host HOST --port PORT` and the TLS
+credentials of a client certificate named `replay`. For a loopback development
+cluster, use `--host 127.0.0.1 --port 7000 --insecure`. External signal routes use
+the coordinator. Live replay uses the running application's state and ordinary
+queue policies; increasing speed can cause `drop_oldest` to discard inputs if
+the consumers cannot keep up. Check runtime counters when selecting a rate.
+
+`make test-replay` prepares the optional recording dependency, captures a live
+two-second signal sequence, and checks that replay reproduces every corresponding
+live observation, including RMS, peak and alarm state. It compares simulation
+traces from one and four workers, then checks live local and distributed replay.
+This test uses temporary captures; it does not consume
+existing recordings or require a cluster. It is separate from `make test` so the
+ordinary suites keep their standard-library-only Python requirements.
+
 ## Cluster deployment
 
 See [deployment instructions](deploy/README.md) and [architecture](docs/architecture.md).

@@ -82,10 +82,24 @@ def prepare(args):
     for component in deployment["components"].values():
         component["container"]["handler"] = str(ROOT / component["container"]["handler"])
         component["cwd"] = str(ROOT)
+    if args.task in ("replay", "replay-build"):
+        model["external_topics"] = {}
+        for number in (1, 2):
+            name = f"sensor_{number}"
+            topic = f"replay.signal_{number}"
+            model["external_topics"][topic] = model["components"][name]["outputs"]["signal"]
+            del model["components"][name]
+            del deployment["components"][name]
+            for sub in model["subscriptions"]:
+                if sub.get("from") == f"{name}.signal":
+                    del sub["from"]
+                    sub["from_topic"] = topic
+                    if sub["id"] in deployment.get("subscriptions", {}):
+                        deployment["subscriptions"][sub["id"]]["routing"] = "broker"
     if args.profile == "cluster" and args.routing == "broker":
         deployment["subscriptions"] = {key: {"routing": "broker", "transport": "tcp"}
                                        for key in deployment.get("subscriptions", {})}
-    destination = ROOT / "build/prepared"
+    destination = ROOT / ("build/replay/prepared" if args.task in ("replay", "replay-build") else "build/prepared")
     write(destination / "model.json", model)
     write(destination / "deployment.json", deployment)
     write(destination / "inputs.json", {"scenario": args.scenario, "profile": args.profile, "routing": args.routing})
@@ -95,7 +109,7 @@ def prepare(args):
 def compile_app(args, *, validate=False):
     prepared = prepare(args)
     options = ["validate" if validate else "build", "--model", prepared / "model.json",
-               "--deployment", prepared / "deployment.json", "--build-dir", ROOT / "build"]
+               "--deployment", prepared / "deployment.json", "--build-dir", prepared.parent]
     if not validate and args.component:
         options += ["--component", args.component]
     cli(args, *options)
@@ -259,12 +273,16 @@ def sources_digest():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", choices=("prepare", "validate", "build", "run", "simulate", "distributed-local", "certs", "images", "render"))
+    parser.add_argument("task", choices=("prepare", "validate", "build", "run", "simulate", "replay", "replay-build", "recording-deps", "distributed-local", "certs", "images", "render"))
     parser.add_argument("--profile", choices=("local", "cluster"), default="local")
     parser.add_argument("--scenario", default="increasing-vibration")
     parser.add_argument("--routing", choices=("mixed", "broker"), default="mixed")
     parser.add_argument("--duration", type=float, default=3)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--loops", type=int, default=1, help="total replay passes; 0 repeats until the duration limit")
+    parser.add_argument("--recording", help="PCAPNG/MCAP signal capture for replay")
+    parser.add_argument("--start-ns", type=int)
+    parser.add_argument("--end-ns", type=int)
     parser.add_argument("--component")
     parser.add_argument("--fail-node")
     parser.add_argument("--framework-root")
@@ -276,9 +294,14 @@ def main():
     try:
         finite(args.duration, 1e-6, 1e9, "duration")
         finite(args.workers, 1, 256, "workers", True)
-        if args.task == "prepare":
+        if args.loops < 0:
+            raise ValueError("loops must be nonnegative")
+        if args.task == "recording-deps":
+            subprocess.run(["make", "-C", str(framework(args) / "sdl"),
+                            "PYTHON=" + sys.executable, "recording-deps"], check=True)
+        elif args.task == "prepare":
             print(prepare(args))
-        elif args.task in ("validate", "build"):
+        elif args.task in ("validate", "build", "replay-build"):
             compile_app(args, validate=args.task == "validate")
         elif args.task in ("run", "simulate"):
             args.profile = "local"
@@ -286,6 +309,20 @@ def main():
             options = ["run", "--duration", args.duration]
             if args.task == "simulate":
                 options += ["--mode", "simulated", "--workers", args.workers, "--trace", ROOT / "build/simulation.jsonl"]
+            cli(args, *options)
+        elif args.task == "replay":
+            if not args.recording:
+                raise ValueError("replay requires --recording FILE")
+            args.profile = "local"
+            compile_app(args)
+            options = ["replay", args.recording, "--plan", ROOT / "build/replay/plan.json",
+                       "--duration", args.duration, "--workers", args.workers, "--loops", args.loops,
+                       "--trace", ROOT / "build/replay/trace.jsonl"]
+            for number in (1, 2):
+                options += ["--map", f"sensor_{number}.signal=replay.signal_{number}"]
+            for name in ("start_ns", "end_ns"):
+                if getattr(args, name) is not None:
+                    options += ["--" + name.replace("_", "-"), getattr(args, name)]
             cli(args, *options)
         elif args.task == "distributed-local":
             distributed_local(args)
