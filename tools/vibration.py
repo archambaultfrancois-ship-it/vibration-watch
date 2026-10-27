@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,19 @@ def finite(value, minimum, maximum, name, integer=False):
     return value
 
 
+def sensor_settings(values):
+    expected = {"samples", "sample_rate_hz", "frequency_hz", "amplitude", "noise", "seed", "ramp_per_second"}
+    if not isinstance(values, dict) or set(values) != expected:
+        raise ValueError("sensor settings require exactly: " + ", ".join(sorted(expected)))
+    finite(values["samples"], 1, 131072, "sample count", True)
+    finite(values["seed"], 1, 2**32 - 1, "seed", True)
+    rate = finite(values["sample_rate_hz"], 1, 1e9, "sample rate")
+    finite(values["frequency_hz"], 0, rate / 2, "frequency")
+    for name in ("amplitude", "noise", "ramp_per_second"):
+        finite(values[name], 0, 1e6, name)
+    return values
+
+
 def prepare(args):
     if not args.scenario.replace("-", "").isalnum():
         raise ValueError("invalid scenario name")
@@ -64,21 +78,14 @@ def prepare(args):
            (machines["machines"], thresholds["rms"], scenario["ramp_per_second"])):
         raise ValueError("configuration must describe machines 1 and 2")
     model["schemas"] = str(ROOT / "schemas")
-    model["components"]["alarm"]["parameters"] = {"thresholds": thresholds["rms"]}
     for identity, machine in machines["machines"].items():
         number = int(identity)
-        values = {
-            "VW_MACHINE": number,
-            "VW_SAMPLES": finite(machine["samples"], 1, 131072, "sample count", True),
-            "VW_SEED": finite(machine["seed"], 1, 2**32 - 1, "seed", True),
-            "VW_RATE": finite(machine["sample_rate_hz"], 1, 1e9, "sample rate"),
-            "VW_FREQUENCY": finite(machine["frequency_hz"], 0, machine["sample_rate_hz"] / 2, "frequency"),
-            "VW_AMPLITUDE": finite(machine["amplitude"], 0, 1e6, "amplitude"),
-            "VW_NOISE": finite(machine["noise"], 0, 1e6, "noise"),
-            "VW_RAMP": finite(scenario["ramp_per_second"][identity], 0, 1e6, "ramp"),
-        }
-        finite(thresholds["rms"][identity], 1e-12, 1e12, "threshold")
-        deployment["components"][f"sensor_{number}"]["env"] = {k: str(v) for k, v in values.items()}
+        values = sensor_settings({**{key: value for key, value in machine.items() if key != "name"},
+                                  "ramp_per_second": scenario["ramp_per_second"][identity]})
+        threshold = finite(thresholds["rms"][identity], 1e-12, 1e12, "threshold")
+        model["shared_parameters"][f"machines/{number}/sensor"]["initial"] = values
+        model["shared_parameters"][f"machines/{number}/detection"]["initial"] = {"rms_threshold": threshold}
+        deployment["components"][f"sensor_{number}"]["env"] = {"VW_MACHINE": str(number)}
     for component in deployment["components"].values():
         component["container"]["handler"] = str(ROOT / component["container"]["handler"])
         component["cwd"] = str(ROOT)
@@ -96,6 +103,12 @@ def prepare(args):
                     sub["from_topic"] = topic
                     if sub["id"] in deployment.get("subscriptions", {}):
                         deployment["subscriptions"][sub["id"]]["routing"] = "broker"
+        for number in (1, 2):
+            del model["shared_parameters"][f"machines/{number}/sensor"]
+        for permissions in deployment.get("parameter_clients", {}).values():
+            for access in ("read", "write"):
+                permissions[access] = [path for path in permissions.get(access, [])
+                                       if path in model["shared_parameters"]]
     if args.profile == "cluster" and args.routing == "broker":
         deployment["subscriptions"] = {key: {"routing": "broker", "transport": "tcp"}
                                        for key in deployment.get("subscriptions", {})}
@@ -217,7 +230,8 @@ def certs(args):
     extensions = directory / "leaf.ext"
     extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
     items = []
-    for name in ["coordinator", *read(ROOT / "model.json")["components"]]:
+    for name in ["coordinator", *read(ROOT / "model.json")["components"],
+                 *read(ROOT / "deployment.cluster.json").get("parameter_clients", {})]:
         key, csr, cert = (directory / (name + suffix) for suffix in (".key", ".csr", ".crt"))
         if not cert.exists():
             openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + name, "-keyout", key, "-out", csr)
@@ -231,6 +245,35 @@ def certs(args):
     write(destination, {"apiVersion": "v1", "kind": "List", "items": items})
     os.chmod(destination, 0o600)
     print(destination)
+
+
+def set_parameters(args):
+    if args.machine is None:
+        raise ValueError(f"{args.task} requires --machine")
+    if args.task == "set-threshold":
+        if args.rms_threshold is None:
+            raise ValueError("set-threshold requires --rms-threshold")
+        value = {"rms_threshold": finite(args.rms_threshold, 1e-12, 1e12, "threshold")}
+        block = "detection"
+    else:
+        if args.file is None:
+            raise ValueError("set-sensor requires --file with a complete sensor settings block")
+        value = sensor_settings(read(args.file))
+        block = "sensor"
+    with tempfile.TemporaryDirectory(prefix="vibration-parameters-") as temporary:
+        source = Path(temporary) / "settings.json"
+        write(source, value)
+        options = ["parameters", "set", f"machines/{args.machine}/{block}",
+                   "--client", "operator", "--file", source, "--plan", args.plan,
+                   "--endpoint", args.endpoint]
+        for name in ("host", "port", "tls_ca", "tls_cert", "tls_key"):
+            if getattr(args, name) is not None:
+                options += ["--" + name.replace("_", "-"), getattr(args, name)]
+        if args.distributed:
+            options += ["--distributed"]
+        if args.insecure:
+            options += ["--insecure"]
+        cli(args, *options)
 
 
 def images(args):
@@ -273,7 +316,7 @@ def sources_digest():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", choices=("prepare", "validate", "build", "run", "simulate", "replay", "replay-build", "recording-deps", "distributed-local", "certs", "images", "render"))
+    parser.add_argument("task", choices=("prepare", "validate", "build", "run", "simulate", "replay", "replay-build", "recording-deps", "distributed-local", "set-threshold", "set-sensor", "certs", "images", "render"))
     parser.add_argument("--profile", choices=("local", "cluster"), default="local")
     parser.add_argument("--scenario", default="increasing-vibration")
     parser.add_argument("--routing", choices=("mixed", "broker"), default="mixed")
@@ -283,6 +326,18 @@ def main():
     parser.add_argument("--recording", help="PCAPNG/MCAP signal capture for replay")
     parser.add_argument("--start-ns", type=int)
     parser.add_argument("--end-ns", type=int)
+    parser.add_argument("--file", help="complete sensor settings JSON for set-sensor")
+    parser.add_argument("--machine", type=int, choices=(1, 2))
+    parser.add_argument("--rms-threshold", type=float, help="positive RMS alarm threshold in m/s^2")
+    parser.add_argument("--plan", default="build/plan.json")
+    parser.add_argument("--endpoint", default="build/endpoint.json")
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--distributed", action="store_true")
+    parser.add_argument("--insecure", action="store_true")
+    parser.add_argument("--tls-ca")
+    parser.add_argument("--tls-cert")
+    parser.add_argument("--tls-key")
     parser.add_argument("--component")
     parser.add_argument("--fail-node")
     parser.add_argument("--framework-root")
@@ -326,6 +381,8 @@ def main():
             cli(args, *options)
         elif args.task == "distributed-local":
             distributed_local(args)
+        elif args.task in ("set-threshold", "set-sensor"):
+            set_parameters(args)
         elif args.task == "certs":
             certs(args)
         elif args.task == "images":

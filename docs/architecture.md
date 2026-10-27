@@ -16,9 +16,18 @@ seed determine the waveform and noise. Rates, sizes and units are explicit in
 the source configuration and signal contract. An analyzer computes RMS and peak
 without external crates. Alarm classification is pure Python and tested without OSE.
 
+Sensor generation settings and alarm thresholds are typed SDL shared parameter
+blocks, separated per machine. Sensors and alarm policy read callback snapshots
+through generated C/Python bindings. Configuration files supply build-time initial
+values; an external `operator` client can replace complete blocks while running.
+Readers apply changes between callbacks; changing a block does not itself trigger
+a business tick. The broker/coordinator retains the latest value for replacement
+workers, with no persistence across its own restart.
+
 Global startup waits for all six components. After activation, a failed analyzer
-can be replaced without resetting sources or the other branch. There is no replay,
-checkpoint, durable alarm log or exactly-once guarantee. Sequence numbers restart
+can be replaced without resetting sources or the other branch. Signal recording
+replay uses a separate model with external sources. There is no checkpoint,
+durable alarm log or exactly-once guarantee. Sequence numbers restart
 when a source restarts; OSE separately identifies network generations to fence
 obsolete senders. Hardware-facing integrations would need device-side fencing too.
 

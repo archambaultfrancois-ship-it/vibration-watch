@@ -50,5 +50,7 @@ help:
 	@echo 'make replay RECORDING=signals.pcapng DURATION=3; make test-replay'
 	@echo 'make replay-build PROFILE=local (or cluster), then ose-ctl replay --mode realtime'
 	@echo 'make demo-distributed FAIL_NODE=analyzer_1 DURATION=8'
+	@echo 'python3 tools/vibration.py set-threshold --machine 1 --rms-threshold 2'
+	@echo 'python3 tools/vibration.py set-sensor --machine 1 --file settings.json'
 	@echo 'make push-images REGISTRY=registry.lan/vibration-watch'
 	@echo 'make deploy (requires Kubernetes access and published images)'

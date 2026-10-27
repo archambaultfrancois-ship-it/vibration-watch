@@ -132,5 +132,21 @@
       "routing": "direct",
       "transport": "tcp"
     }
+  },
+  "parameter_clients": {
+    "operator": {
+      "read": [
+        "machines/1/detection",
+        "machines/2/detection",
+        "machines/1/sensor",
+        "machines/2/sensor"
+      ],
+      "write": [
+        "machines/1/detection",
+        "machines/2/detection",
+        "machines/1/sensor",
+        "machines/2/sensor"
+      ]
+    }
   }
 }

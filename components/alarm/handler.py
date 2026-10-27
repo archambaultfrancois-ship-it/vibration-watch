@@ -3,7 +3,8 @@ from policy import classify
 
 
 def process(ctx, message):
-    threshold = ctx.parameters["thresholds"][str(message.machine_id)]
+    settings = getattr(ctx, f"parameters_detection_{message.machine_id}")()
+    threshold = settings.rms_threshold
     ctx.publish_event(Alarm(machine_id=message.machine_id, sequence=message.sequence,
         time_ns=message.time_ns, rms=message.rms, peak=message.peak,
         state=classify(message.rms, threshold)))

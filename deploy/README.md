@@ -46,6 +46,15 @@ For production, supply equivalently named Secrets using your certificate issuer
 and rotation procedures. OSE matches exact certificate common names to component
 identities, independent of changing pod addresses. The coordinator's identity is
 `coordinator`; worker identities are the model names such as `analyzer_1`.
+The external parameter client uses a separate `operator` identity, declared in
+`deployment.cluster.json`. `make certs` also creates its credentials under
+`build/pki/` and a corresponding Secret. Keep its private key with the operator;
+application workers do not need it. From a host that can reach the coordinator,
+use the parameter commands in the [application guide](../README.md) with
+`--distributed`, explicit `--host`/`--port`, the CA and operator leaf credentials.
+Runtime changes survive worker replacement; coordinator replacement restores
+initial settings. Changed SDL contracts or initial configuration still require
+rebuilding the images.
 
 `make deploy` combines namespace creation, credentials and application resources.
 It requires an explicitly selected kubectl context. `NAMESPACE` defaults to

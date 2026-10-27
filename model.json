@@ -15,6 +15,12 @@
       },
       "parameters": {
         "machine_id": 1
+      },
+      "parameter_bindings": {
+        "signal": {
+          "path": "machines/1/sensor",
+          "access": "read"
+        }
       }
     },
     "analyzer_1": {
@@ -45,6 +51,12 @@
       },
       "parameters": {
         "machine_id": 2
+      },
+      "parameter_bindings": {
+        "signal": {
+          "path": "machines/2/sensor",
+          "access": "read"
+        }
       }
     },
     "analyzer_2": {
@@ -80,6 +92,16 @@
       },
       "trigger": {
         "mode": "on_change"
+      },
+      "parameter_bindings": {
+        "detection_1": {
+          "path": "machines/1/detection",
+          "access": "read"
+        },
+        "detection_2": {
+          "path": "machines/2/detection",
+          "access": "read"
+        }
       }
     },
     "observer": {
@@ -156,5 +178,43 @@
         "retry": {}
       }
     }
-  ]
+  ],
+  "shared_parameters": {
+    "machines/1/detection": {
+      "root": "DetectionSettings",
+      "initial": {
+        "rms_threshold": 1.0
+      }
+    },
+    "machines/2/detection": {
+      "root": "DetectionSettings",
+      "initial": {
+        "rms_threshold": 1.0
+      }
+    },
+    "machines/1/sensor": {
+      "root": "SensorSettings",
+      "initial": {
+        "samples": 16384,
+        "sample_rate_hz": 163840,
+        "frequency_hz": 640,
+        "amplitude": 0.4,
+        "noise": 0.01,
+        "seed": 42,
+        "ramp_per_second": 1.0
+      }
+    },
+    "machines/2/sensor": {
+      "root": "SensorSettings",
+      "initial": {
+        "samples": 16384,
+        "sample_rate_hz": 163840,
+        "frequency_hz": 960,
+        "amplitude": 0.6,
+        "noise": 0.01,
+        "seed": 43,
+        "ramp_per_second": 0.0
+      }
+    }
+  }
 }

@@ -2,7 +2,7 @@
 
 A standalone SDL/OSE application: two synthetic C sensors, two Rust analyzers,
 Python alarm policy and a Python terminal observer. Each signal block contains
-16,384 float samples (64 KiB); results and alarm observations are small messages.
+16,384 float samples by default (64 KiB); results and alarm observations are small messages.
 The sensor uses the OSE clock and a seeded generator, so simulation is reproducible.
 
 ## Requirements and first run
@@ -18,7 +18,12 @@ make simulate WORKERS=4 DURATION=2
 make test
 ```
 
-The pinned framework lives in `deps/sdl-ose`; for framework development, set
+On Android/Termux, keep the host awake during real-time/distributed tests with
+`termux-wake-lock`, then release it with `termux-wake-unlock` afterwards. Host
+suspension expires worker leases by design.
+
+The pinned framework (`cad7cba`, including typed shared parameter blocks) lives
+in `deps/sdl-ose`; for framework development, set
 `FRAMEWORK_ROOT=/absolute/path/to/sdl-ose`. Build artifacts and prepared absolute
 paths live in `build/`. Rebuild after moving a checkout. The workflow uses the
 public `python -m ose.cli` interface from the selected framework checkout.
@@ -80,6 +85,75 @@ the distributed protocol without claiming to test a physical node outage.
 The alarm inputs are independent and optional: losing one motor's branch does
 not stall the other. Every analysis produces an observation with state 0 or 1;
 this application does not retain an alarm history or implement debouncing.
+
+## Change settings while running
+
+Each machine has two typed SDL parameter blocks:
+
+| Path | Fields | Reader |
+| --- | --- | --- |
+| `machines/1/sensor`, `machines/2/sensor` | `samples`, `sample_rate_hz`, `frequency_hz`, `amplitude`, `noise`, `seed`, `ramp_per_second` | Corresponding C sensor |
+| `machines/1/detection`, `machines/2/detection` | `rms_threshold` | Python alarm policy |
+
+`config/machines.json`, `config/thresholds.json` and the selected signal profile
+provide the initial values when building. The alarm and sensors read generated
+typed bindings at every callback. Machine identity, graph, tick period and queue
+policies remain deployment/model configuration.
+
+Start `make run DURATION=60`, then use a second terminal in the application:
+
+```sh
+source ./setenv.sh
+export OSE_PARAMETER_TOKEN='vibration-watch-local-operator'
+ose-ctl parameters list --client operator
+ose-ctl parameters get machines/1/detection --client operator
+python3 tools/vibration.py set-threshold --machine 1 --rms-threshold 2.0
+ose-ctl parameters watch machines/1/detection --client operator --count 2
+```
+
+The token above is the local development credential declared in
+`deployment.local.json`. The `operator` client has read/write rights on these
+four blocks; application components have read access only. To change a sensor,
+retrieve its complete settings, edit the JSON, and submit the whole block:
+
+```sh
+ose-ctl parameters get machines/1/sensor --client operator > build/sensor-1.json
+# Edit build/sensor-1.json, keeping all seven fields.
+python3 tools/vibration.py set-sensor --machine 1 --file build/sensor-1.json
+```
+
+The application commands validate business constraints before submitting values:
+1–131072 samples, a nonzero uint32 seed, sample rate 1–1e9 Hz, vibration frequency
+0–half the sample rate, amplitude/noise/ramp 0–1e6 and RMS threshold 1e-12–1e12.
+The generic `ose-ctl parameters set` checks SDL types; writers using that interface
+must also respect these business constraints.
+
+An update applies at a subsequent callback, without restarting the component.
+Sensor changes affect the next generated block. Sample count changes resize its
+buffer; a different seed resets only the noise generator. Sample index and sequence
+continue. Frequency/rate changes may introduce a phase jump. Amplitude remains
+`amplitude + ramp_per_second * elapsed OSE time`, including after a ramp change.
+An alarm threshold change is used on subsequent analyses; it does not reclassify
+previous observations. Updating one machine leaves the other machine's settings
+unchanged. Writes replace complete blocks, and separate blocks do not change
+atomically.
+
+A replacement worker receives the current settings before starting. Values live
+in broker/coordinator memory; restarting it restores the built initial values.
+Captures contain signal messages, not parameter updates: replay uses the replay
+plan's settings. Reproducing a session with changed settings requires supplying
+those settings separately. Deterministic simulations can schedule complete block
+updates using `ose-ctl run --mode simulated --scenario FILE`, as described in the
+[framework parameter guide](deps/sdl-ose/ose/docs/parameters.md).
+
+The same commands accept `--host`, `--port` and `--plan`; use
+`--plan build/replay/plan.json --endpoint build/replay/endpoint.json` for a local
+replay application (only detection blocks are retained there). Distributed clients
+use `--distributed --tls-ca build/pki/ca.crt --tls-cert build/pki/operator.crt
+--tls-key build/pki/operator.key` with an explicit host and port. `make certs`
+generates the development operator credentials. Cluster access authenticates the
+`operator` certificate identity; it does not use the local development token.
+See [cluster deployment](deploy/README.md) for credentials and connectivity.
 
 ## Replay captured signals
 

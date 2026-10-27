@@ -3,49 +3,60 @@
 #include <errno.h>
 #include <stdlib.h>
 
-static uint32_t machine, count, random_state;
+static uint32_t machine, count, random_state, configured_seed;
 static uint64_t sample_index;
-static double rate, frequency, amplitude, ramp, noise;
 static float *samples;
 
-static int number(const char *name, double *value, double minimum, double maximum) {
-    const char *text = getenv(name);
-    char *end;
-    if (!text || !*text) return 0;
-    errno = 0;
-    *value = strtod(text, &end);
-    return !errno && !*end && isfinite(*value) && *value >= minimum && *value <= maximum;
+static int valid_settings(const SensorSettings *p) {
+    return p && p->samples >= 1 && p->samples <= 131072 && p->seed != 0 &&
+        isfinite(p->sample_rate_hz) && p->sample_rate_hz >= 1 && p->sample_rate_hz <= 1e9 &&
+        isfinite(p->frequency_hz) && p->frequency_hz >= 0 && p->frequency_hz <= p->sample_rate_hz / 2 &&
+        isfinite(p->amplitude) && p->amplitude >= 0 && p->amplitude <= 1e6 &&
+        isfinite(p->noise) && p->noise >= 0 && p->noise <= 1e6 &&
+        isfinite(p->ramp_per_second) && p->ramp_per_second >= 0 && p->ramp_per_second <= 1e6;
+}
+
+static int apply_settings(ChainContext *ctx, const SensorSettings *p) {
+    if (!valid_settings(p)) return chain_fail(ctx, "invalid sensor settings");
+    if (p->samples != count) {
+        float *resized = realloc(samples, (size_t)p->samples * sizeof(*samples));
+        if (!resized) return chain_fail(ctx, "cannot allocate sample buffer");
+        samples = resized;
+        count = p->samples;
+    }
+    if (p->seed != configured_seed) {
+        configured_seed = p->seed;
+        random_state = p->seed;
+    }
+    return 1;
 }
 
 static int on_start(ChainContext *ctx) {
-    double id, size, seed;
-    (void)ctx;
-    if (!number("VW_MACHINE", &id, 1, UINT32_MAX) || floor(id) != id ||
-        !number("VW_SAMPLES", &size, 1, 131072) || floor(size) != size ||
-        !number("VW_SEED", &seed, 1, UINT32_MAX) || floor(seed) != seed ||
-        !number("VW_RATE", &rate, 1, 1000000000) ||
-        !number("VW_FREQUENCY", &frequency, 0, rate / 2) ||
-        !number("VW_AMPLITUDE", &amplitude, 0, 1000000) ||
-        !number("VW_RAMP", &ramp, 0, 1000000) ||
-        !number("VW_NOISE", &noise, 0, 1000000)) return 0;
+    const char *identity = getenv("VW_MACHINE");
+    char *end;
+    if (!identity || !*identity) return chain_fail(ctx, "missing VW_MACHINE identity");
+    errno = 0;
+    double id = strtod(identity, &end);
+    if (errno || *end || !isfinite(id) || id < 1 || id > UINT32_MAX || floor(id) != id)
+        return chain_fail(ctx, "invalid VW_MACHINE identity");
     machine = (uint32_t)id;
-    count = (uint32_t)size;
-    random_state = (uint32_t)seed;
     sample_index = 0;
-    samples = malloc((size_t)count * sizeof(*samples));
-    return samples != NULL;
+    return apply_settings(ctx, parameters_signal(ctx));
 }
 
 static int on_tick(ChainContext *ctx) {
-    double level = amplitude + ramp * chain_now(ctx);
-    if (!isfinite(level) || level > 1e12) return 0;
+    const SensorSettings *p = parameters_signal(ctx);
+    if (!apply_settings(ctx, p)) return 0;
+    double level = p->amplitude + p->ramp_per_second * chain_now(ctx);
+    if (!isfinite(level) || level > 1e12) return chain_fail(ctx, "sensor amplitude exceeds limit");
     for (uint32_t i = 0; i < count; ++i)
-        samples[i] = vibration_sample(sample_index++, rate, frequency, level, noise, &random_state);
+        samples[i] = vibration_sample(sample_index++, p->sample_rate_hz, p->frequency_hz,
+                                      level, p->noise, &random_state);
     SignalBlock message = {0};
     message.machine_id = machine;
     message.sequence = chain_tick_index(ctx);
     message.time_ns = chain_time_ns(ctx);
-    message.sample_rate_hz = rate;
+    message.sample_rate_hz = p->sample_rate_hz;
     message.samples_count = count;
     message.samples = samples;
     return publish_signal(ctx, &message);
@@ -55,6 +66,7 @@ static int on_stop(ChainContext *ctx) {
     (void)ctx;
     free(samples);
     samples = NULL;
+    count = configured_seed = random_state = 0;
     return 1;
 }
 
