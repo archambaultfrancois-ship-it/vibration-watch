@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,18 @@ class SharedSettingsTests(unittest.IsolatedAsyncioTestCase):
         else:
             self.assertNotEqual(result.returncode, 0)
         return result
+
+    async def parameters_shell(self, action, options, environment, data=None):
+        alias = 'params-get' if action == 'get' else 'params-set'
+        script = 'set -eu\nshopt -s expand_aliases\nsource "$APP_ENV"\n' + alias + ' "$@"\n'
+        env = dict(environment, APP_ENV=str(ROOT / 'setenv.sh'), OSE_PYTHON=sys.executable)
+        env.pop('OSE_PARAMETER_CLIENT', None)
+        process = await asyncio.create_subprocess_exec('bash', '--noprofile', '--norc', '-c', script, 'test',
+            *map(str, options), cwd=ROOT, env=env, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await asyncio.wait_for(process.communicate(data), 30)
+        self.assertEqual(process.returncode, 0, stderr.decode())
+        return json.loads(stdout)
 
     async def until(self, predicate, processes):
         async def wait():
@@ -90,6 +103,18 @@ class SharedSettingsTests(unittest.IsolatedAsyncioTestCase):
                     path = "machines/1/detection"
                     get = ["-m", "ose.cli", "parameters", "get", path, "--client", "operator", *endpoint]
                     self.assertEqual(json.loads((await self.invoke(get, environment)).stdout), {"rms_threshold": 1.0})
+                    saved = None
+                    if shutil.which('bash'):
+                        shell_environment = dict(environment)
+                        if profile == 'local':
+                            shell_environment.pop('OSE_PARAMETER_TOKEN', None)
+                        saved = await self.parameters_shell('get', endpoint, shell_environment)
+                        self.assertEqual(set(saved), {f'machines/{n}/{block}' for n in (1, 2)
+                                                      for block in ('sensor', 'detection')})
+                        self.assertEqual(await self.parameters_shell('get', ['^machines/1/', *endpoint], shell_environment),
+                                         {key: value for key, value in saved.items() if key.startswith('machines/1/')})
+                        self.assertEqual(await self.parameters_shell('get', ['--exact', path, *endpoint], shell_environment),
+                                         {path: {'rms_threshold': 1.0}})
                     update = ["tools/vibration.py", "set-threshold", "--machine", "1",
                               "--framework-root", FRAMEWORK, *endpoint]
                     rejected = await self.invoke([*update, "--rms-threshold", ".01"],
@@ -102,6 +127,26 @@ class SharedSettingsTests(unittest.IsolatedAsyncioTestCase):
                     await self.invoke([*update, "--rms-threshold", ".01"], environment)
                     await self.until(lambda: any(row["machine_id"] == 1 and row["state"] == 1
                                                 for row in observations(log_path)), processes)
+                    if saved is not None:
+                        count = len(observations(log_path))
+                        restored = await self.parameters_shell('set', ['--file', '-', *endpoint], shell_environment,
+                                                               json.dumps(saved).encode())
+                        self.assertEqual(set(restored['updated']), set(saved))
+                        await self.until(lambda: any(row['machine_id'] == 1 and row['state'] == 0
+                                                    for row in observations(log_path)[count:]), processes)
+                        self.assertEqual(await self.parameters_shell('get', endpoint, shell_environment), saved)
+                        settings_tree = directory / 'parameter exports'
+                        (settings_tree / 'motors').mkdir(parents=True)
+                        for machine in (1, 2):
+                            (settings_tree / 'motors' / f'motor-{machine}.json').write_text(json.dumps(
+                                {key: value for key, value in saved.items() if key.startswith(f'machines/{machine}/')}))
+                        restored = await self.parameters_shell('set', ['--dir', settings_tree, *endpoint], shell_environment)
+                        self.assertEqual(set(restored['updated']), set(saved))
+                        self.assertEqual(await self.parameters_shell('get', endpoint, shell_environment), saved)
+                        count = len(observations(log_path))
+                        await self.invoke([*update, '--rms-threshold', '.01'], environment)
+                        await self.until(lambda: any(row['machine_id'] == 1 and row['state'] == 1
+                                                    for row in observations(log_path)[count:]), processes)
                     if profile == "cluster":
                         old = workers["alarm"]
                         await self.stop(old)
@@ -120,7 +165,7 @@ class SharedSettingsTests(unittest.IsolatedAsyncioTestCase):
                     settings = {"samples": 2048, "sample_rate_hz": 8192, "frequency_hz": 64,
                                 "amplitude": 4., "noise": 0., "seed": 47, "ramp_per_second": 0.}
                     sensor_file = directory / "sensor.json"
-                    sensor_file.write_text(json.dumps(settings))
+                    sensor_file.write_text(json.dumps({'machines/1/sensor': settings}))
                     await self.invoke([*update, "--rms-threshold", "1"], environment)
                     count = len(observations(log_path))
                     await self.invoke(["tools/vibration.py", "set-sensor", "--machine", "1", "--file", sensor_file,

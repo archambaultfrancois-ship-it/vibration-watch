@@ -19,6 +19,16 @@ class SensorSettingsTests(unittest.TestCase):
         self.settings["frequency_hz"] = self.settings["sample_rate_hz"] / 2
         workflow.sensor_settings(self.settings)
 
+    def test_single_sensor_export_and_bare_block_keep_business_validation(self):
+        path = 'machines/1/sensor'
+        self.assertEqual(workflow.sensor_settings_document(self.settings, 1), self.settings)
+        self.assertEqual(workflow.sensor_settings_document({path: self.settings}, 1), self.settings)
+        for document in ({'machines/2/sensor': self.settings},
+                         {path: self.settings, 'machines/2/sensor': self.settings},
+                         {path: dict(self.settings, amplitude=-1)}, {path: {}}):
+            with self.subTest(document=document), self.assertRaises(ValueError):
+                workflow.sensor_settings_document(document, 1)
+
     def test_rejects_invalid_values_and_partial_blocks(self):
         cases = {"samples": (0, 131073, 3.5, True), "seed": (0, 2**32, 1.5),
                  "sample_rate_hz": (0, 1e10, float("inf")),

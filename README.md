@@ -8,7 +8,8 @@ The sensor uses the OSE clock and a seeded generator, so simulation is reproduci
 ## Requirements and first run
 
 Python 3.10+, a C99 compiler, Rust/Cargo and Git. OpenSSL is needed to generate
-development TLS certificates. No Python third-party runtime packages are required.
+development TLS certificates. The optional parameter directory sync uses
+`inotify-simple` on Linux/Termux; ordinary runs need no third-party Python packages.
 
 ```sh
 git submodule update --init --recursive
@@ -22,7 +23,7 @@ On Android/Termux, keep the host awake during real-time/distributed tests with
 `termux-wake-lock`, then release it with `termux-wake-unlock` afterwards. Host
 suspension expires worker leases by design.
 
-The pinned framework (`cad7cba`, including typed shared parameter blocks) lives
+The pinned framework (`5b817d1`, including parameter directory sync and extended JSON limits) lives
 in `deps/sdl-ose`; for framework development, set
 `FRAMEWORK_ROOT=/absolute/path/to/sdl-ose`. Build artifacts and prepared absolute
 paths live in `build/`. Rebuild after moving a checkout. The workflow uses the
@@ -71,6 +72,49 @@ worker processes over TCP. It uses explicit loopback-only plaintext mode.
 Logs, counters and before/after PIDs are saved under `build/`. This exercises
 the distributed protocol without claiming to test a physical node outage.
 
+## Run with parameter directory sync
+
+Install the optional watcher once using the application's Python interpreter:
+
+```sh
+python3 -m pip install './deps/sdl-ose/ose[sync]'
+make run PARAMS_SYNC=1 DURATION=60
+make run PARAMS_SYNC=1 PARAMS_DIR=./my-parameters SCENARIO=normal DURATION=60
+make demo-distributed PARAMS_SYNC=1 DURATION=60
+```
+
+The Python launcher accepts the same option:
+
+```sh
+python3 tools/vibration.py run --params-sync --duration 60
+python3 tools/vibration.py run --params-sync ./my-parameters --duration 60
+```
+
+`--params-sync` defaults to the `parameters/` directory. Each block has a unit
+export file, for example `parameters/machines/1/detection.json`:
+
+```json
+{"machines/1/detection": {"rms_threshold": 1.0}}
+```
+
+Existing valid files are restored when connecting; missing files are generated
+from OSE. File edits update the running application, and application parameter
+changes update their files. This restoration can occur after component `on_start`.
+The launcher selects the current run's endpoint and loads the operator token
+from its compiled plan, so sourcing `setenv.sh` is optional for these commands.
+The distributed loopback demo enables its development operator token in the
+prepared plan; production TLS deployment settings remain unchanged.
+
+The synchronizer stops with the application, including Ctrl+C, SIGTERM and the
+duration limit. An unexpected synchronizer exit stops the run. Distributed logs
+include `build/distributed-logs/params-sync.log`; local sync messages appear on
+stderr. Synchronization is available for real-time `run` and `distributed-local`,
+and is disabled by default.
+
+After sourcing the environment, `app-make run PARAMS_SYNC=1 DURATION=60` forwards
+these Make options. The framework's generic `app-run` shortcut starts OSE directly;
+use `make run` or `app-make run` to enable Vibration's managed synchronizer.
+
 ## Project resources
 
 - `schemas/`: contracts and units; `vibration_signal.sdl` avoids shadowing Python's `signal` module.
@@ -100,33 +144,93 @@ provide the initial values when building. The alarm and sensors read generated
 typed bindings at every callback. Machine identity, graph, tick period and queue
 policies remain deployment/model configuration.
 
-Start `make run DURATION=60`, then use a second terminal in the application:
+In a first Bash terminal, start a normal run so changes are easy to observe:
 
 ```sh
 source ./setenv.sh
-export OSE_PARAMETER_TOKEN='vibration-watch-local-operator'
-ose-ctl parameters list --client operator
-ose-ctl parameters get machines/1/detection --client operator
-python3 tools/vibration.py set-threshold --machine 1 --rms-threshold 2.0
-ose-ctl parameters watch machines/1/detection --client operator --count 2
+app-run SCENARIO=normal
 ```
 
-The token above is the local development credential declared in
-`deployment.local.json`. The `operator` client has read/write rights on these
-four blocks; application components have read access only. To change a sensor,
-retrieve its complete settings, edit the JSON, and submit the whole block:
+In a second Bash terminal, source the application environment again. It selects
+the pinned framework and loads the local operator token automatically:
 
 ```sh
-ose-ctl parameters get machines/1/sensor --client operator > build/sensor-1.json
-# Edit build/sensor-1.json, keeping all seven fields.
+source ./setenv.sh
+params-list
+params-get                            # All four blocks
+params-get '^machines/1/'              # Both blocks for motor 1
+params-get '/detection$'               # Both alarm thresholds
+params-get --exact machines/1/detection
+python3 tools/vibration.py set-threshold --machine 1 --rms-threshold 2.0
+params-watch machines/1/detection --count 2
+```
+
+`params-get` takes a Python regular expression by default and returns one JSON
+object mapping each selected path to its complete block. Omitting the pattern
+selects all blocks; `params-get-all` is a synonym. Use `--exact` for a literal path and quote
+patterns to prevent shell expansion. Changing a threshold affects subsequent
+observations in the first terminal; stop a run or a watch with Ctrl+C.
+
+The `operator` client has read/write rights on all four blocks; application
+components have read access only. `source ./setenv.sh` loads
+`OSE_PARAMETER_TOKEN` from `build/plan.json`, or from `deployment.local.json`
+before a build. The local development token is declared in that deployment.
+An explicit environment token is preserved. Set `OSE_PARAMETER_CLIENT` before
+sourcing to choose a different configured client.
+
+To change a sensor, export only its settings, edit the JSON, and submit it with
+the application's business validation:
+
+```sh
+params-get --exact machines/1/sensor > build/sensor-1.json
+# Edit the seven fields under "machines/1/sensor" in build/sensor-1.json.
 python3 tools/vibration.py set-sensor --machine 1 --file build/sensor-1.json
 ```
+
+`set-sensor` accepts this single-block export or the original bare settings
+object. Exports for another machine or multiple blocks are rejected.
+
+For a backup and restore, the path-keyed format works for one or several blocks:
+
+```sh
+params-get > build/parameters.json
+params-set --file build/parameters.json
+# Reinject only the selected thresholds through stdin:
+params-get '/detection$' | params-set --file -
+# Submit an explicit path-keyed threshold value:
+printf '%s\n' '{"machines/1/detection":{"rms_threshold":0.1}}' | params-set --file -
+```
+
+Exports can also be split across files and restored recursively:
+
+```sh
+mkdir -p build/parameters/motors
+params-get '^machines/1/' > build/parameters/motors/motor-1.json
+params-get '^machines/2/' > build/parameters/motors/motor-2.json
+params-set --dir build/parameters
+```
+
+`--dir` reads all `*.json` files, including files in subdirectories, in relative
+filename order. Every file contains path-keyed exports; filenames do not select
+parameter paths. Duplicate paths, invalid files or invalid blocks stop the import
+before the first write. `--dir` cannot be combined with `--file` or a positional
+path. `--exact` selects a literal path for `params-get` and `params-sync`;
+it is not an import option for `params-set`.
+
+There is no `--all` option to manage: imported paths come from the JSON keys.
+All imported blocks are checked against their SDL contracts before the first
+write. Reads and writes are successive; there is no atomic snapshot or transaction
+across blocks. A service failure can leave some blocks applied; its error lists
+acknowledged writes. JSON inputs are limited to 16 MiB per file or stdin input;
+directory imports additionally limit the sum of file contents to 64 MiB. These
+limits can be adjusted with `--max-json-size BYTES` and
+`--max-total-json-size BYTES`. The SDL transport limits still apply.
 
 The application commands validate business constraints before submitting values:
 1–131072 samples, a nonzero uint32 seed, sample rate 1–1e9 Hz, vibration frequency
 0–half the sample rate, amplitude/noise/ramp 0–1e6 and RMS threshold 1e-12–1e12.
-The generic `ose-ctl parameters set` checks SDL types; writers using that interface
-must also respect these business constraints.
+The generic `params-set` / `ose-ctl parameters set` commands check SDL types;
+writers using those interfaces must also respect these business constraints.
 
 An update applies at a subsequent callback, without restarting the component.
 Sensor changes affect the next generated block. Sample count changes resize its
@@ -153,6 +257,8 @@ use `--distributed --tls-ca build/pki/ca.crt --tls-cert build/pki/operator.crt
 --tls-key build/pki/operator.key` with an explicit host and port. `make certs`
 generates the development operator credentials. Cluster access authenticates the
 `operator` certificate identity; it does not use the local development token.
+The ordinary `ose-ctl parameters get PATH --client operator` still returns a
+bare block for existing scripts; the shell shortcut returns a path-keyed export.
 See [cluster deployment](deploy/README.md) for credentials and connectivity.
 
 ## Replay captured signals
