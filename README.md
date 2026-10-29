@@ -23,7 +23,7 @@ On Android/Termux, keep the host awake during real-time/distributed tests with
 `termux-wake-lock`, then release it with `termux-wake-unlock` afterwards. Host
 suspension expires worker leases by design.
 
-The pinned framework (`5b817d1`, including parameter directory sync and extended JSON limits) lives
+The pinned framework (`a83652a`, including component-owned internal recording points) lives
 in `deps/sdl-ose`; for framework development, set
 `FRAMEWORK_ROOT=/absolute/path/to/sdl-ose`. Build artifacts and prepared absolute
 paths live in `build/`. Rebuild after moving a checkout. The workflow uses the
@@ -71,6 +71,42 @@ worker processes over TCP. It uses explicit loopback-only plaintext mode.
 `FAIL_NODE` terminates and replaces that worker; survivor PIDs remain unchanged.
 Logs, counters and before/after PIDs are saved under `build/`. This exercises
 the distributed protocol without claiming to test a physical node outage.
+
+## Record an analyzer's internal input
+
+The Rust analyzer declares the internal point `dsp.input` during `on_start`.
+It records the `SignalBlock` received by the analyzer before calculating RMS
+and peak. This lets you inspect what each analyzer actually received, including
+the machine ID, sequence, signal timestamp, sample rate and samples. Each instance
+has its own point: `analyzer_1.record.dsp.input` and
+`analyzer_2.record.dsp.input`. No additional output or graph subscription is needed.
+The SDK skips serialization while the point is disabled.
+
+The pinned OSE framework includes the required component SDK. Initialize the
+submodule and rebuild before starting the application:
+
+```sh
+# First terminal, from the Vibration Watch directory:
+git submodule update --init --recursive
+make run DURATION=60
+
+# Second Bash terminal, also from the Vibration Watch directory:
+source ./setenv.sh
+record
+```
+
+```text
+record> list --kind internal
+record> show analyzer_1.record.dsp.input
+record> select analyzer_*.record.dsp.input
+record> start analyzer-inputs.pcapng
+record> status
+record> stop
+```
+
+These points observe analyzer inputs; `sensor_*.signal` observes sensor
+publications. Capture both to compare sequences across delivery. Internal points
+are also available in distributed execution and stay disabled in simulation.
 
 ## Run with parameter directory sync
 

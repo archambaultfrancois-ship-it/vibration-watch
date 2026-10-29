@@ -7,7 +7,15 @@ mod math;
 pub struct Handler;
 
 impl Callbacks for Handler {
+    fn on_start(&mut self, ctx: &mut Context) -> Result {
+        ctx.declare_recording_point::<SignalBlock>(
+            "dsp.input",
+            "Signal block received before RMS and peak calculation",
+        )
+    }
+
     fn on_input(&mut self, ctx: &mut Context, message: &SignalBlock) -> Result {
+        ctx.record("dsp.input", message)?;
         let (rms, peak) = math::summarize(&message.samples)?;
         ctx.publish_result(&Analysis {
             machine_id: message.machine_id,

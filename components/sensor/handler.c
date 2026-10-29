@@ -16,11 +16,11 @@ static int valid_settings(const SensorSettings *p) {
         isfinite(p->ramp_per_second) && p->ramp_per_second >= 0 && p->ramp_per_second <= 1e6;
 }
 
-static int apply_settings(ChainContext *ctx, const SensorSettings *p) {
-    if (!valid_settings(p)) return chain_fail(ctx, "invalid sensor settings");
+static int apply_settings(OseContext *ctx, const SensorSettings *p) {
+    if (!valid_settings(p)) return ose_fail(ctx, "invalid sensor settings");
     if (p->samples != count) {
         float *resized = realloc(samples, (size_t)p->samples * sizeof(*samples));
-        if (!resized) return chain_fail(ctx, "cannot allocate sample buffer");
+        if (!resized) return ose_fail(ctx, "cannot allocate sample buffer");
         samples = resized;
         count = p->samples;
     }
@@ -31,38 +31,38 @@ static int apply_settings(ChainContext *ctx, const SensorSettings *p) {
     return 1;
 }
 
-static int on_start(ChainContext *ctx) {
+static int on_start(OseContext *ctx) {
     const char *identity = getenv("VW_MACHINE");
     char *end;
-    if (!identity || !*identity) return chain_fail(ctx, "missing VW_MACHINE identity");
+    if (!identity || !*identity) return ose_fail(ctx, "missing VW_MACHINE identity");
     errno = 0;
     double id = strtod(identity, &end);
     if (errno || *end || !isfinite(id) || id < 1 || id > UINT32_MAX || floor(id) != id)
-        return chain_fail(ctx, "invalid VW_MACHINE identity");
+        return ose_fail(ctx, "invalid VW_MACHINE identity");
     machine = (uint32_t)id;
     sample_index = 0;
     return apply_settings(ctx, parameters_signal(ctx));
 }
 
-static int on_tick(ChainContext *ctx) {
+static int on_tick(OseContext *ctx) {
     const SensorSettings *p = parameters_signal(ctx);
     if (!apply_settings(ctx, p)) return 0;
-    double level = p->amplitude + p->ramp_per_second * chain_now(ctx);
-    if (!isfinite(level) || level > 1e12) return chain_fail(ctx, "sensor amplitude exceeds limit");
+    double level = p->amplitude + p->ramp_per_second * ose_now(ctx);
+    if (!isfinite(level) || level > 1e12) return ose_fail(ctx, "sensor amplitude exceeds limit");
     for (uint32_t i = 0; i < count; ++i)
         samples[i] = vibration_sample(sample_index++, p->sample_rate_hz, p->frequency_hz,
                                       level, p->noise, &random_state);
     SignalBlock message = {0};
     message.machine_id = machine;
-    message.sequence = chain_tick_index(ctx);
-    message.time_ns = chain_time_ns(ctx);
+    message.sequence = ose_tick_index(ctx);
+    message.time_ns = ose_time_ns(ctx);
     message.sample_rate_hz = p->sample_rate_hz;
     message.samples_count = count;
     message.samples = samples;
     return publish_signal(ctx, &message);
 }
 
-static int on_stop(ChainContext *ctx) {
+static int on_stop(OseContext *ctx) {
     (void)ctx;
     free(samples);
     samples = NULL;
